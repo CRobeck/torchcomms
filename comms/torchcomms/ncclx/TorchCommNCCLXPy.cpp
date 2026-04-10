@@ -8,7 +8,10 @@
 
 #include "comms/torchcomms/ncclx/NcclxGlobalApi.hpp"
 #include "comms/torchcomms/ncclx/TorchCommNCCLX.hpp"
+#include "comms/torchcomms/ncclx/TorchCommNCCLXCCA.hpp"
 #include "comms/torchcomms/ncclx/TorchCommWindowNCCLX.hpp"
+#include "cudawrap.h" // @manual
+#include "param.h" // @manual
 
 namespace py = pybind11;
 using namespace torch::comms;
@@ -362,6 +365,31 @@ Returns:
     dict[str, dict[str, str]]: Nested key-value pairs of all communicator states.
 )",
       py::call_guard<py::gil_scoped_release>());
+
+  m.def(
+      "init_caching_allocator_hook",
+      []() {
+        // Initialize the NCCL environment (folly singletons, cvars, logging,
+        // etc.) and CUDA driver library. This is the same initialization that
+        // TorchCommNCCLX::init() gets transitively through NCCL communicator
+        // creation (ncclCommInitRankConfig → initEnv + ncclCudaLibraryInit).
+        initEnv();
+        (void)ncclCudaLibraryInit();
+        CachingAllocatorHook::getInstance();
+      },
+      R"(
+Attach the CCA (CUDA Caching Allocator) memory hook for NCCLX.
+
+This initializes the global memory registration hook that automatically
+registers/deregisters GPU memory segments with the NCCLX transport layer
+(ctran) as they are allocated/freed by PyTorch's CUDACachingAllocator.
+
+This does not require creating a communicator. It is useful for P2P transfer
+cases where memory needs to be registered for RDMA without a communicator.
+
+The hook is a process-global singleton -- calling this multiple times is safe
+(subsequent calls are no-ops).
+)");
 
 #ifdef TORCHCOMMS_HAS_NCCL_DEVICE_API
   // Device API methods (get_device_window, register_local_buffer,
